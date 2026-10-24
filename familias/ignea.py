@@ -4,17 +4,21 @@ from motor.utilitarios import suavizar_esqueleto
 
 # ==========================================================
 # FEITIÇARIA ÍGNEA — A Doutrina da Transformação
-# Glifos de traços fortes e afilados (lâminas de pincel, ponta aguda),
-# na linha da caligrafia oriental. Cada runa nasce de UM arquétipo
-# estrutural, sorteado conforme os pesos do preset:
-#   lâmina    - haste alta e curva, a "língua de fogo" básica
-#   fênix     - duas lâminas que se cruzam (transformação)
-#   chama     - base em cuia com chamas de alturas diferentes (Chama Viva)
-#   catálise  - explosão de raios a partir de um núcleo
-#   brasa     - traços curtos e pesados + brasas (combustão lenta)
-#   reignição - lâmina partida, com uma brasa no intervalo
-# Por cima, modificadores: cruzamentos, labaredas, fagulhas e
-# rugosidade (borda queimada). Tudo na cor principal da runa.
+# Escrita de traços fortes e afilados (lâminas de pincel, ponta aguda),
+# na linha da caligrafia oriental, mas com GRAMÁTICA:
+#
+#  1. VOCABULÁRIO DE TRAÇOS (heng, shu, pie, na, dian, ti, arco):
+#     cada tipo tem perfil de pressão e curvatura próprios, como num
+#     alfabeto de verdade.
+#  2. COMPONENTES: grupos de traços ancorados numa grade (haste com
+#     ramos, teto, cruz, cuia de chama, irradiação, haste partida...).
+#  3. LAYOUTS: o glifo é um componente único, dois lado a lado, um sobre
+#     o outro, ou um componente cercado por uma cuia de chama.
+#  4. MODIFICADORES: labaredas, cruzamentos, fagulhas ancoradas nas
+#     pontas e rugosidade (borda queimada).
+#
+# "estrutura" regula o equilíbrio: alto = traços firmes na grade
+# (escrita); baixo = mais curva, desvio e riscos livres (cicatriz).
 # ==========================================================
 
 
@@ -47,10 +51,6 @@ def _tangente(pts, i, janela=4):
     return dx / d, dy / d
 
 
-def _comprimento(pts):
-    return sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:]))
-
-
 def _media_movel(v, w):
     n = len(v)
     out = []
@@ -68,11 +68,21 @@ def _dist_min_all(tracos, c):
     return d
 
 
+def _escolher(opcoes):
+    """opcoes: lista de (item, peso)."""
+    total = sum(p for _, p in opcoes)
+    x = random.random() * total
+    for item, p in opcoes:
+        if x < p:
+            return item
+        x -= p
+    return opcoes[-1][0]
+
+
 # ---------- lâmina de pincel ----------
 
 def _perfil(c=0.4, ea=1.0, eb=1.6, w0=0.0, w1=0.0):
-    """Largura ao longo do traço: sobe até c (expoente ea) e afina até a ponta (expoente eb).
-    eb alto = ponta longa e finíssima. w0/w1 = largura relativa no começo/fim."""
+    """Largura ao longo do traço: sobe até c (expoente ea) e afina até a ponta (expoente eb)."""
     def f(t):
         if t <= c:
             x = t / c if c > 0 else 1.0
@@ -82,13 +92,9 @@ def _perfil(c=0.4, ea=1.0, eb=1.6, w0=0.0, w1=0.0):
     return f
 
 
-def _traco_s(pts, w, perfil, rug):
+def _traco_s(pts, w, perfil, rug, tipo="livre"):
     return {"pts": _reamostrar(suavizar_esqueleto(pts, iteracoes=3), 0.8),
-            "w": w, "perfil": perfil, "rug": rug}
-
-
-def _traco(P, ctrl, w, perfil, rug):
-    return _traco_s([P(a, b) for a, b in ctrl], w, perfil, rug)
+            "w": w, "perfil": perfil, "rug": rug, "tipo": tipo}
 
 
 def _desenhar(draw, pts, cor, w, perfil, rug):
@@ -121,98 +127,198 @@ def _brasa(draw, c, r, rug, cor):
     draw.polygon(pts, fill=cor)
 
 
-# ---------- arquétipos (coordenadas locais: a = eixo da chama 0..1, b = lateral) ----------
+# ---------- vocabulário de traços ----------
+# Convenção: o traço começa em 'a' (lado grosso) e termina em 'b' (ponta).
+# bulge: curvatura lateral relativa ao comprimento (sinal = lado).
 
-def _arq_lamina(P, w, rug):
-    s = random.choice([-1, 1])
-    b0, b1 = random.uniform(-0.15, 0.15), random.uniform(-0.22, 0.22)
-    ctrl = [(0.0, b0), (0.5, (b0 + b1) / 2 + s * random.uniform(0.08, 0.28)), (1.0, b1)]
-    if random.random() < 0.5:  # pé em gancho na base
-        ctrl.insert(0, (0.05, b0 - s * random.uniform(0.08, 0.16)))
-    perf = _perfil(random.uniform(0.25, 0.5), random.uniform(0.7, 1.2), random.uniform(1.3, 2.2),
-                   random.choice([0.0, 0.0, 0.3]), 0.0)
-    return [_traco(P, ctrl, w * random.uniform(0.9, 1.15), perf, rug)], []
-
-
-def _arq_fenix(P, w, rug):
-    s = random.choice([-1, 1])
-    cruz = random.uniform(0.40, 0.60)
-    ctrl_a = [(0.05, -0.32 * s), (cruz, 0.03 * s + random.uniform(-0.06, 0.06)), (0.97, 0.26 * s)]
-    ctrl_b = [(0.12, 0.34 * s), (cruz + 0.04, -0.02 * s + random.uniform(-0.06, 0.06)), (0.88, -0.30 * s)]
-    tracos = [
-        _traco(P, ctrl_a, w, _perfil(0.35, 0.9, random.uniform(1.4, 2.2), 0.0, 0.0), rug),
-        _traco(P, ctrl_b, w * random.uniform(0.55, 0.8), _perfil(0.4, 1.0, random.uniform(1.3, 2.0), 0.25, 0.0), rug),
-    ]
-    if random.random() < 0.65:  # cauda
-        tracos.append(_traco(P, [(cruz, 0.0), (cruz * 0.55, 0.14 * s), (0.0, 0.02 * s)],
-                             w * 0.6, _perfil(0.3, 1.0, 1.3, 0.0, 0.0), rug))
-    return tracos, []
+TIPOS = {
+    "heng": dict(c=0.15, ea=0.8, eb=1.5, w0=0.55, bulge=-0.05),   # horizontal: início chapado, ponta fina
+    "shu":  dict(c=0.35, ea=1.0, eb=1.7, w0=0.50, bulge=0.04),    # haste: ponta aguda em b
+    "pie":  dict(c=0.20, ea=0.9, eb=1.8, w0=0.70, bulge=0.10),    # desce à esquerda, varrida
+    "na":   dict(c=0.70, ea=1.3, eb=0.9, w0=0.10, bulge=-0.09),   # desce à direita, pé pesado
+    "dian": dict(c=0.25, ea=0.8, eb=1.3, w0=0.70, bulge=0.15),    # ponto-vírgula (brasa)
+    "ti":   dict(c=0.20, ea=1.0, eb=1.5, w0=0.50, bulge=0.0),     # gancho/flick curto
+    "arco": dict(c=0.50, ea=1.0, eb=1.5, w0=0.00, bulge=0.20),    # ponta aguda nas duas pontas
+}
 
 
-def _arq_chama(P, w, rug):
-    base = [(0.12, -0.55), (0.03, -0.2), (0.0, 0.05), (0.06, 0.35), (0.16, 0.58)]
-    nl = random.randint(2, 4)
-    lam = []
-    for k in range(nl):
-        b = -0.36 + 0.72 * k / (nl - 1) + random.uniform(-0.06, 0.06)
-        h = random.uniform(0.6, 1.0) * (1 - 0.45 * abs(b))
-        lean = b * random.uniform(0.2, 0.6) + random.uniform(-0.08, 0.08)
-        bojo = random.choice([-1, 1]) * random.uniform(0.03, 0.12)
-        lam.append((h, [(0.07, b), (h * 0.5, b + lean * 0.5 + bojo), (h, b + lean)]))
-    lam.sort(key=lambda x: -x[0])  # a mais alta primeiro (será o traço principal)
-    tracos = [_traco(P, ctrl, w * random.uniform(0.55, 0.95),
-                     _perfil(0.3, 1.0, random.uniform(1.3, 2.0), 0.35, 0.0), rug) for _, ctrl in lam]
-    tracos.append(_traco(P, base, w * 0.9, _perfil(0.5, 1.0, 1.0, 0.0, 0.0), rug))
-    return tracos, []
+class _Fabrica:
+    """Guarda o mapeamento da grade do glifo para a tela e acumula os traços."""
+
+    def __init__(self, G, w, rug, estr):
+        self.G, self.w, self.rug, self.estr = G, w, rug, estr
+        self.jit = 0.012 + 0.07 * (1 - estr)
+        self.curv = 0.6 + 1.6 * (1 - estr)
+        self.tracos, self.pontos = [], []
+
+    def c(self, cell, u, v):
+        x0, y0, x1, y1 = cell
+        return (x0 + u * (x1 - x0), y0 + v * (y1 - y0))
+
+    def _j(self, p):
+        j = self.jit
+        return self.G(p[0] + random.uniform(-j, j), p[1] + random.uniform(-j, j))
+
+    def t(self, tipo, a, b, wf=1.0):
+        tp = TIPOS[tipo]
+        pa, pb = self._j(a), self._j(b)
+        L = max(math.hypot(pb[0] - pa[0], pb[1] - pa[1]), 1e-6)
+        sinal = -1 if random.random() < (1 - self.estr) * 0.3 else 1
+        bj = tp["bulge"] * self.curv * random.uniform(0.6, 1.3) * sinal
+        px, py = -(pb[1] - pa[1]) / L, (pb[0] - pa[0]) / L
+        mid = ((pa[0] + pb[0]) / 2 + px * bj * L, (pa[1] + pb[1]) / 2 + py * bj * L)
+        perf = _perfil(tp["c"], tp["ea"], tp["eb"], tp["w0"], 0.0)
+        tr = _traco_s([pa, mid, pb], self.w * wf, perf, self.rug, tipo)
+        self.tracos.append(tr)
+        return tr
+
+    def curva(self, tipo, pts, wf=1.0):
+        tp = TIPOS[tipo]
+        perf = _perfil(tp["c"], tp["ea"], tp["eb"], tp["w0"], 0.0)
+        tr = _traco_s([self._j(p) for p in pts], self.w * wf, perf, self.rug, tipo)
+        self.tracos.append(tr)
+        return tr
+
+    def ponto(self, p, r):
+        x, y = self.G(*p)
+        self.pontos.append((x, y, max(1.5, r)))
 
 
-def _arq_catalise(P, w, rug):
-    m = random.randint(5, 8)
-    ca = random.uniform(0.4, 0.55)
-    off = random.uniform(0, math.tau)
-    tracos = []
-    for k in range(m):
-        phi = off + math.tau * k / m + random.uniform(-0.3, 0.3)
-        r0 = random.uniform(0.03, 0.06)
-        r1 = random.uniform(0.15, 0.48) * (1 + 0.35 * math.cos(phi))
-        curl = random.uniform(-0.09, 0.09)
-        ctrl = [(ca + r0 * math.cos(phi), r0 * math.sin(phi)),
-                (ca + 0.5 * r1 * math.cos(phi) - curl * math.sin(phi), 0.5 * r1 * math.sin(phi) + curl * math.cos(phi)),
-                (ca + r1 * math.cos(phi), r1 * math.sin(phi))]
-        tracos.append(_traco(P, ctrl, w * random.uniform(0.4, 0.9),
-                             _perfil(0.12, 1.0, random.uniform(1.2, 1.8), 0.55, 0.0), rug))
-    tracos.sort(key=lambda t: -_comprimento(t["pts"]))
-    return tracos, [P(ca, 0.0) + (w * 0.55,)]
+# ---------- componentes (cada um ocupa uma célula da grade do glifo) ----------
+
+def c_haste(F, cell, wf=1.0):
+    lean = random.uniform(-0.08, 0.08)
+    base = F.c(cell, 0.5, 1.0)
+    F.t("shu", base, F.c(cell, 0.5 + lean, 0.0), wf * 1.1)
+    if random.random() < 0.55:  # pé em gancho
+        s = random.choice([-1, 1])
+        F.t("ti", base, F.c(cell, 0.5 - 0.3 * s, 0.86), wf * 0.7)
 
 
-def _arq_brasa(P, w, rug):
-    tracos = [_traco(P, [(0.03, -0.55), (0.0, 0.0), (0.05, 0.55)], w * 0.5, _perfil(0.5, 1.0, 1.4, 0.0, 0.0), rug)]
-    m = random.randint(3, 5)
-    for k in range(m):
-        b = -0.42 + 0.84 * k / (m - 1) + random.uniform(-0.05, 0.05)
-        a0 = random.uniform(0.1, 0.32)
-        ln = random.uniform(0.1, 0.26)
-        tilt = random.uniform(-0.12, 0.12)
-        ctrl = [(a0, b), (a0 + ln * 0.5, b + tilt * 0.4 + random.uniform(-0.04, 0.04)), (a0 + ln, b + tilt)]
-        tracos.append(_traco(P, ctrl, w * random.uniform(0.9, 1.35), _perfil(0.12, 1.0, 1.4, 0.8, 0.0), rug))
-    pontos = [P(random.uniform(0.45, 0.8), random.uniform(-0.4, 0.4)) + (w * random.uniform(0.18, 0.32),)
-              for _ in range(random.randint(1, 3))]
-    return tracos, pontos
+def c_ramos(F, cell, wf=1.0):
+    v = random.choice(["arvore", "garfo", "pente"])
+    if v == "arvore":
+        F.t("shu", F.c(cell, 0.5, 1.0), F.c(cell, 0.5, 0.0), wf * 1.1)
+        h = random.uniform(0.28, 0.45)
+        if random.random() < 0.75:
+            F.t("heng", F.c(cell, 0.04, h + 0.04), F.c(cell, 0.96, h - 0.04), wf * 0.8)
+        y0 = random.uniform(0.55, 0.7)
+        if random.random() < 0.85:
+            F.t("pie", F.c(cell, 0.48, y0), F.c(cell, 0.06, 1.0), wf * 0.8)
+        if random.random() < 0.85:
+            F.t("na", F.c(cell, 0.52, y0), F.c(cell, 0.94, 1.0), wf * 0.8)
+    elif v == "garfo":
+        topo_haste = random.uniform(0.38, 0.5)
+        F.t("shu", F.c(cell, 0.5, 1.0), F.c(cell, 0.5, topo_haste), wf * 1.1)
+        y = topo_haste + 0.05
+        F.t("shu", F.c(cell, 0.5, y), F.c(cell, 0.1, 0.0), wf * 0.9)
+        F.t("shu", F.c(cell, 0.5, y), F.c(cell, 0.9, 0.0), wf * 0.9)
+        if random.random() < 0.55:
+            F.t("shu", F.c(cell, 0.5, y), F.c(cell, 0.5, -0.02), wf * 0.85)
+    else:
+        s = random.choice([-1, 1])
+        F.t("shu", F.c(cell, 0.5, 1.0), F.c(cell, 0.5, 0.0), wf)
+        for y in (0.74, 0.52, 0.30)[:random.randint(2, 3)]:
+            F.t("ti", F.c(cell, 0.5, y), F.c(cell, 0.5 + 0.4 * s, y - 0.2), wf * 0.65)
 
 
-def _arq_reignicao(P, w, rug):
-    s = random.choice([-1, 1])
-    bm = random.uniform(-0.1, 0.1)
-    corte = random.uniform(0.38, 0.48)
-    low = [(0.0, bm - 0.1 * s), (corte * 0.5, bm + 0.1 * s * random.uniform(0.5, 1.5)), (corte, bm)]
-    up = [(corte + 0.12, bm + random.uniform(-0.06, 0.06)),
-          (0.75, bm - 0.1 * s * random.uniform(0.3, 1.2)),
-          (1.0, bm + random.uniform(-0.2, 0.2))]
-    tracos = [
-        _traco(P, up, w * 1.05, _perfil(0.45, 0.9, random.uniform(1.4, 2.2), 0.0, 0.0), rug),
-        _traco(P, low, w * 0.95, _perfil(0.5, 1.0, 1.5, random.choice([0.0, 0.3]), 0.1), rug),
-    ]
-    return tracos, [P(corte + 0.06, bm + random.uniform(-0.03, 0.03)) + (w * 0.5,)]
+def c_teto(F, cell, wf=1.0):
+    F.t("pie", F.c(cell, 0.54, 0.0), F.c(cell, 0.06, 0.98), wf)
+    F.t("na", F.c(cell, 0.42, 0.14), F.c(cell, 0.96, 0.98), wf * 0.9)
+    if random.random() < 0.4:
+        F.ponto(F.c(cell, 0.5, -0.14), F.w * 0.3 * wf)
+
+
+def c_cruz(F, cell, wf=1.0):
+    F.t("pie", F.c(cell, 0.92, 0.0), F.c(cell, 0.08, 1.0), wf)
+    F.t("na", F.c(cell, 0.08, 0.06), F.c(cell, 0.92, 0.94), wf * 0.9)
+    if random.random() < 0.4:
+        F.t("ti", F.c(cell, 0.5, 0.5), F.c(cell, 0.5 + random.choice([-0.3, 0.3]), 0.12), wf * 0.5)
+
+
+def c_cuia(F, cell, wf=1.0, interior=True):
+    ea, eb = random.uniform(0.04, 0.3), random.uniform(0.04, 0.3)
+    fu = random.uniform(0.35, 0.65)
+    F.curva("arco", [F.c(cell, 0.0, ea), F.c(cell, 0.05, 0.62), F.c(cell, fu, 1.0),
+                     F.c(cell, 0.95, 0.62), F.c(cell, 1.0, eb)], wf * 1.05)
+    if random.random() < 0.4:  # gancho na borda, voltado para dentro
+        if random.random() < 0.5:
+            F.t("ti", F.c(cell, 0.0, ea), F.c(cell, 0.2, ea - 0.12), wf * 0.6)
+        else:
+            F.t("ti", F.c(cell, 1.0, eb), F.c(cell, 0.8, eb - 0.12), wf * 0.6)
+    if not interior:
+        return
+    v = _escolher([("linguas", 3.0), ("brasa", 1.0), ("vazia", 0.5)])
+    if v == "linguas":
+        nl = random.randint(1, 3)
+        for k in range(nl):
+            u = 0.5 + (k - (nl - 1) / 2) * 0.28
+            F.t("shu", F.c(cell, u, 0.92), F.c(cell, u + random.uniform(-0.1, 0.1), random.uniform(0.2, 0.55)), wf * 0.85)
+    elif v == "brasa":
+        F.ponto(F.c(cell, 0.5, 0.55), F.w * 0.35 * wf)
+
+
+def c_irradia(F, cell, wf=1.0):
+    nodo = F.c(cell, 0.5, 0.55)
+    x0, y0, x1, y1 = cell
+    angs = random.sample([-90, -45, 0, 45, 90, 135, 180, 225], random.randint(3, 5))
+    if -90 not in angs and random.random() < 0.7:
+        angs[0] = -90
+    for a in angs:
+        r = random.uniform(0.3, 0.5)
+        ca, sa = math.cos(math.radians(a)), math.sin(math.radians(a))
+        ini = (nodo[0] + 0.05 * ca * (x1 - x0), nodo[1] + 0.05 * sa * (y1 - y0))
+        fim = (nodo[0] + r * ca * (x1 - x0), nodo[1] + r * sa * (y1 - y0))
+        F.t("ti", ini, fim, wf * random.uniform(0.6, 0.95))
+    F.ponto(nodo, F.w * 0.28 * wf)
+
+
+def c_partido(F, cell, wf=1.0):
+    xs = 0.5 + random.uniform(-0.05, 0.05)
+    corte = random.uniform(0.5, 0.62)
+    F.t("shu", F.c(cell, xs, 1.0), F.c(cell, xs, corte), wf * 1.05)
+    F.ponto(F.c(cell, xs, corte - 0.1), F.w * 0.3 * wf)
+    F.t("shu", F.c(cell, xs, corte - 0.2), F.c(cell, xs + random.uniform(-0.05, 0.05), 0.0), wf * 0.9)
+
+
+def c_onda(F, cell, wf=1.0):
+    F.curva("arco", [F.c(cell, 0.38, 1.0), F.c(cell, 0.7, 0.68), F.c(cell, 0.32, 0.36), F.c(cell, 0.62, 0.0)], wf)
+    if random.random() < 0.4:
+        F.t("dian", F.c(cell, 0.3, 0.2), F.c(cell, 0.22, 0.28), wf * 0.6)
+
+
+# ---------- layouts ----------
+
+def _compor(F, ig):
+    cruz = ig.get("cruzamentos", 0)
+    chama = ig.get("chama", 0)
+    cat = ig.get("catalise", 0)
+    reig = ig.get("reignicao", 0)
+    comp = ig.get("complexidade", 0.5)
+
+    grandes = [(c_ramos, 1.0), (c_cruz, 0.3 + 2 * cruz), (c_cuia, 0.1 + 1.2 * chama),
+               (c_irradia, 0.2 + 2 * cat), (c_partido, 0.2 + 2 * reig), (c_onda, 0.8), (c_haste, 0.6)]
+    estreitos = [(c_haste, 1.0), (c_onda, 0.8), (c_partido, 0.2 + 2 * reig), (c_ramos, 0.6)]
+    de_topo = [(c_teto, 1.0), (c_cruz, 0.3 + 2 * cruz), (c_irradia, 0.2 + 2 * cat)]
+    de_base = [(c_haste, 1.0), (c_ramos, 1.0), (c_cuia, 0.1 + 1.2 * chama), (c_partido, 0.2 + 2 * reig), (c_onda, 0.8)]
+    pequenos = [(c_haste, 1.0), (c_cruz, 0.5), (c_irradia, 0.4)]
+
+    p_cerc, p_dup, p_topo = comp * 0.22, comp * 0.5, comp * 0.4
+    x = random.random()
+    if x < p_cerc:
+        c_cuia(F, (0.0, 0.14, 1.0, 1.0), 0.95, interior=False)
+        _escolher(pequenos)(F, (0.3, 0.12, 0.7, 0.66), 0.55)
+    elif x < p_cerc + p_dup:
+        esq, dir_ = (0.0, 0.0, 0.36, 1.0), (0.46, 0.0, 1.0, 1.0)
+        if random.random() < 0.5:
+            esq, dir_ = (0.64, 0.0, 1.0, 1.0), (0.0, 0.0, 0.54, 1.0)
+        _escolher(estreitos)(F, esq, 0.8)
+        _escolher(grandes)(F, dir_, 0.85)
+    elif x < p_cerc + p_dup + p_topo:
+        _escolher(de_topo)(F, (0.08, 0.0, 0.92, 0.42), 0.75)
+        _escolher(de_base)(F, (0.0, 0.5, 1.0, 1.0), 0.85)
+    else:
+        _escolher(grandes)(F, (0.0, 0.0, 1.0, 1.0), 1.0)
 
 
 # ---------- modificadores ----------
@@ -225,7 +331,7 @@ def _cruzar(main, H, w, rug):
     ang = random.choice([-1, 1]) * math.radians(random.uniform(35, 75))
     c, s = math.cos(ang), math.sin(ang)
     dx, dy = tx * c - ty * s, tx * s + ty * c
-    comp = H * random.uniform(0.18, 0.42)
+    comp = H * random.uniform(0.18, 0.4)
     atras = random.uniform(0.2, 0.45)
     bj = random.choice([-1, 1]) * comp * 0.12
     p0 = (p[0] - dx * comp * atras, p[1] - dy * comp * atras)
@@ -242,37 +348,41 @@ def _labareda(main, H, w, rug):
     tx, ty = _tangente(main, i)
     side = random.choice([-1, 1])
     nx, ny = -ty * side, tx * side
-    L = H * random.uniform(0.12, 0.3)
+    L = H * random.uniform(0.12, 0.28)
 
     def q(a, b):
         return (p[0] + tx * L * a + nx * L * b, p[1] + ty * L * a + ny * L * b)
 
-    ctrl = [q(0, 0), q(0.3, 0.05), q(0.65, 0.22), q(0.95, 0.5)]
-    return _traco_s(ctrl, w * random.uniform(0.35, 0.6), _perfil(0.15, 1.0, random.uniform(1.4, 2.0), 0.6, 0.0), rug)
+    return _traco_s([q(0, 0), q(0.3, 0.05), q(0.65, 0.22), q(0.95, 0.5)],
+                    w * random.uniform(0.35, 0.6),
+                    _perfil(0.15, 1.0, random.uniform(1.4, 2.0), 0.6, 0.0), rug)
 
 
-def _fagulha(main, tracos, pontos, H, esp, rug):
-    n = len(main)
+def _fagulha(F, H, esp):
+    """Brasa lançada da ponta de um traço, seguindo a direção dele."""
+    cand = [t for t in F.tracos if t["tipo"] in ("shu", "pie", "na", "ti", "arco") and len(t["pts"]) > 10]
+    if not cand:
+        return
     for _ in range(8):
-        i = random.randint(int(n * 0.2), int(n * 0.95))
-        tx, ty = _tangente(main, i)
-        side = random.choice([-1, 1])
-        nx, ny = -ty * side, tx * side
-        d, f = H * random.uniform(0.12, 0.3), H * random.uniform(-0.05, 0.2)
-        c = (main[i][0] + nx * d + tx * f, main[i][1] + ny * d + ty * f)
-        if _dist_min_all(tracos, c) < 16 + esp * 2:
+        t = random.choice(cand)
+        pts = t["pts"]
+        tx, ty = _tangente(pts, len(pts) - 1, 6)
+        nx, ny = -ty, tx
+        d, lado = H * random.uniform(0.05, 0.12), H * random.uniform(-0.05, 0.05)
+        c = (pts[-1][0] + tx * d + nx * lado, pts[-1][1] + ty * d + ny * lado)
+        if _dist_min_all(F.tracos, c) < 10 + esp * 1.5:
             continue
-        if random.random() < 0.4:
-            pontos.append((c[0], c[1], esp * random.uniform(0.8, 1.5)))
+        if random.random() < 0.45:
+            F.pontos.append((c[0], c[1], max(1.5, esp * random.uniform(0.7, 1.2))))
         else:
-            ang = math.atan2(ty, tx) + random.uniform(-0.7, 0.7)
-            ln = H * random.uniform(0.04, 0.09)
+            ang = math.atan2(ty, tx) + random.uniform(-0.5, 0.5)
+            ln = H * random.uniform(0.035, 0.07)
             ux, uy = math.cos(ang), math.sin(ang)
             a = (c[0] - ux * ln / 2, c[1] - uy * ln / 2)
             b = (c[0] + ux * ln / 2, c[1] + uy * ln / 2)
-            mid = (c[0] - uy * ln * 0.15 * side, c[1] + ux * ln * 0.15 * side)
-            tracos.append(_traco_s([a, mid, b], esp * random.uniform(1.4, 2.2),
-                                   _perfil(0.05, 1.0, 1.2, 0.9, 0.0), rug))
+            mid = (c[0] - uy * ln * 0.15, c[1] + ux * ln * 0.15)
+            F.tracos.append(_traco_s([a, mid, b], esp * random.uniform(1.3, 2.0),
+                                     _perfil(0.05, 1.0, 1.2, 0.9, 0.0), F.rug, "dian"))
         return
 
 
@@ -282,51 +392,37 @@ def aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo):
     ig = config.get("ignea", {})
     if not ig:
         return
+
+    estr = ig.get("estrutura", 0.6)
     rug = ig.get("rugosidade", 0.5)
-    H = min(cx, cy) * 1.45
-    w = esp * 3.0
+    S = min(cx, cy) * 1.45
+    Bw, Bh = S * 0.78, S
+    slant = random.uniform(-0.12, 0.12)
+    espelho = random.random() < 0.5
 
-    # orientação: majoritariamente vertical, ponta para cima
-    r = random.random()
-    if r < 0.78:
-        ang = math.radians(-90 + random.uniform(-22, 22))
-    elif r < 0.90:
-        ang = math.radians(90 + random.uniform(-22, 22))
-    else:
-        ang = math.radians(random.choice([0, 180]) + random.uniform(-15, 15))
-    espelho = random.choice([-1, 1])
-    dx, dy = math.cos(ang), math.sin(ang)
-    px, py = -dy * espelho, dx * espelho
+    def G(x, y):
+        if espelho:
+            x = 1 - x
+        return (cx + (x - 0.5) * Bw + (0.5 - y) * Bh * slant, cy + (y - 0.5) * Bh)
 
-    def P(a, b):
-        return (cx + dx * (a - 0.5) * H + px * b * H, cy + dy * (a - 0.5) * H + py * b * H)
+    F = _Fabrica(G, esp * 3.8, rug, estr)
+    _compor(F, ig)
+    if not F.tracos:
+        return
 
-    # arquétipo
-    pesos = [(_arq_lamina, 1.0),
-             (_arq_fenix, 2 * ig.get("fenix", 0)),
-             (_arq_chama, 2 * ig.get("chama", 0)),
-             (_arq_catalise, 2 * ig.get("catalise", 0)),
-             (_arq_brasa, 2 * ig.get("brasa", 0)),
-             (_arq_reignicao, 2 * ig.get("reignicao", 0))]
-    x = random.random() * sum(p for _, p in pesos)
-    escolhido = pesos[0][0]
-    for fn, p in pesos:
-        if x < p:
-            escolhido = fn
-            break
-        x -= p
-    tracos, pontos = escolhido(P, w, rug)
-    main = tracos[0]["pts"]
+    espessos = [t for t in F.tracos if t["tipo"] in ("shu", "pie", "na", "arco")] or F.tracos
 
-    for _ in range(2):
-        if random.random() < ig.get("cruzamentos", 0):
-            tracos.append(_cruzar(main, H, w, rug))
+    p_cruz = ig.get("cruzamentos", 0) * 0.5 + (1 - estr) * 0.4
+    if random.random() < p_cruz:
+        F.tracos.append(_cruzar(random.choice(espessos)["pts"], Bh, F.w, rug))
     for _ in range(3):
         if random.random() < ig.get("labaredas", 0):
-            tracos.append(_labareda(main, H, w, rug))
-    for _ in range(4):
+            F.tracos.append(_labareda(random.choice(espessos)["pts"], Bh, F.w, rug))
+    for _ in range(3):
         if random.random() < ig.get("fagulhas", 0):
-            _fagulha(main, tracos, pontos, H, esp, rug)
+            _fagulha(F, Bh, esp)
+
+    tracos, pontos = F.tracos, F.pontos
 
     # enquadramento: centraliza e reduz se passar do canvas
     xs, ys = [], []

@@ -184,32 +184,33 @@ if modo == "1. Criação Manual":
     with st.sidebar.expander("11. Família Pyre"):
         ativa_ignea = st.checkbox("Ativar Família Pyre (Dinâmica e Pinceladas)")
         if ativa_ignea:
-            st.markdown("*Simulação de espessura variável e terminações orgânicas.*")
-            p_i_rug = st.slider("Rugosidade de Borda (%)", 0, 100, 60) / 100.0
-            p_i_fenix = st.slider("Arquétipo: Interseção (%)", 0, 100, 40) / 100.0
-            p_i_chama = st.slider("Arquétipo: Base Côncava (%)", 0, 100, 30) / 100.0
-            p_i_catalise = st.slider("Arquétipo: Expansão Radial (%)", 0, 100, 20) / 100.0
-            p_i_brasa = st.slider("Arquétipo: Traços Isolados (%)", 0, 100, 20) / 100.0
-            p_i_reig = st.slider("Arquétipo: Linha Partida (%)", 0, 100, 30) / 100.0
-            p_i_cruz = st.slider("Modificador: Cortes (%)", 0, 100, 60) / 100.0
-            p_i_lab = st.slider("Modificador: Ganchos (%)", 0, 100, 70) / 100.0
-            p_i_fag = st.slider("Modificador: Partículas (%)", 0, 100, 80) / 100.0
-        else: p_i_rug = p_i_fenix = p_i_chama = p_i_catalise = p_i_brasa = p_i_reig = p_i_cruz = p_i_lab = p_i_fag = 0.0
+            st.markdown("*Lâminas afiladas: do orgânico (cicatriz) ao estruturado (alfabeto).*")
+            p_i_estr = st.slider("Estrutura (Orgânico ↔ Escrita) (%)", 0, 100, 65) / 100.0
+            p_i_comp = st.slider("Complexidade (Glifos Compostos) (%)", 0, 100, 50) / 100.0
+            p_i_rug = st.slider("Rugosidade de Borda (%)", 0, 100, 50) / 100.0
+            p_i_chama = st.slider("Componente: Cuia de Chama (%)", 0, 100, 50) / 100.0
+            p_i_catalise = st.slider("Componente: Irradiação (%)", 0, 100, 40) / 100.0
+            p_i_reig = st.slider("Componente: Haste Partida (%)", 0, 100, 40) / 100.0
+            p_i_cruz = st.slider("Componente: Cruz / Cortes (%)", 0, 100, 40) / 100.0
+            p_i_lab = st.slider("Modificador: Labaredas (%)", 0, 100, 30) / 100.0
+            p_i_fag = st.slider("Modificador: Fagulhas (%)", 0, 100, 40) / 100.0
+        else: p_i_estr = p_i_comp = p_i_rug = p_i_chama = p_i_catalise = p_i_reig = p_i_cruz = p_i_lab = p_i_fag = 0.0
 
     with st.sidebar.expander("12. Família Tide"):
         ativa_marinha = st.checkbox("Ativar Família Tide (Contínua/Ondular)")
         if ativa_marinha:
+            st.markdown("*Traço único de pena larga, com volutas, laços e marcas.*")
             p_m_corrente = st.slider("Ondulação Base (%)", 0, 100, 70) / 100.0
-            p_m_lacos = st.slider("Laços Internos (%)", 0, 100, 50) / 100.0
-            p_m_ondas = st.slider("Variação de Traço (%)", 0, 100, 70) / 100.0
-            p_m_respingos = st.slider("Pontos Desconexos (%)", 0, 100, 60) / 100.0
-            p_m_ruptura = st.slider("Ganchos e Rupturas (%)", 0, 100, 50) / 100.0
-            p_m_vertical = st.slider("Alinhamento Vertical (%)", 0, 100, 25) / 100.0
-            cor_onda = st.color_picker("Cor Secundária/Tinta", "#3D8BFF")
-        else: 
-            p_m_corrente = p_m_lacos = p_m_ondas = p_m_respingos = p_m_ruptura = p_m_vertical = 0.0
-            cor_onda = "#3D8BFF"
-            
+            p_m_contraste = st.slider("Contraste da Pena (%)", 0, 100, 80) / 100.0
+            p_m_espirais = st.slider("Volutas nas Pontas (%)", 0, 100, 70) / 100.0
+            p_m_lacos = st.slider("Laços Internos (%)", 0, 100, 40) / 100.0
+            p_m_bojos = st.slider("Bojos (Formas Fechadas) (%)", 0, 100, 35) / 100.0
+            p_m_ramos = st.slider("Ramos de Pincel (%)", 0, 100, 50) / 100.0
+            p_m_marcas = st.slider("Marcas e Pontos (%)", 0, 100, 40) / 100.0
+            p_m_ruptura = st.slider("Ganchos e Rupturas (%)", 0, 100, 30) / 100.0
+            p_m_vertical = st.slider("Alinhamento Vertical (%)", 0, 100, 30) / 100.0
+        else: p_m_corrente = p_m_contraste = p_m_espirais = p_m_lacos = p_m_bojos = p_m_ramos = p_m_marcas = p_m_ruptura = p_m_vertical = 0.0
+
     with st.sidebar.expander("13. Família Calculus"):
         ativa_gravitacional = st.checkbox("Ativar Família Calculus (Algébrica)")
         if ativa_gravitacional:
@@ -248,8 +249,8 @@ if modo == "1. Criação Manual":
         "estelar": {"constelacao": p_e_constelacao, "estrelas": p_e_estrelas, "orbitas": p_e_orbitas, "eixo_astral": p_e_eixo},
         "solar": {"foco": p_s_foco, "irradiacao": p_s_irradiacao, "coroa": p_s_coroa, "eclipse": p_s_eclipse},
         "lunar": {"caligrafia": p_l_caligrafia, "fases": p_l_fases, "orbitas": p_l_orbitas, "auxiliares": p_l_auxiliares, "hastes": p_l_hastes, "arcos_internos": p_l_internos},
-        "ignea": {"rugosidade": p_i_rug, "fenix": p_i_fenix, "chama": p_i_chama, "catalise": p_i_catalise, "brasa": p_i_brasa, "reignicao": p_i_reig, "cruzamentos": p_i_cruz, "labaredas": p_i_lab, "fagulhas": p_i_fag},
-        "marinha": {"corrente": p_m_corrente, "lacos": p_m_lacos, "ondas": p_m_ondas, "respingos": p_m_respingos, "ruptura": p_m_ruptura, "vertical": p_m_vertical, "cor_onda": cor_onda},
+        "ignea": {"estrutura": p_i_estr, "complexidade": p_i_comp, "rugosidade": p_i_rug, "chama": p_i_chama, "catalise": p_i_catalise, "reignicao": p_i_reig, "cruzamentos": p_i_cruz, "labaredas": p_i_lab, "fagulhas": p_i_fag},
+        "marinha": {"corrente": p_m_corrente, "contraste": p_m_contraste, "espirais": p_m_espirais, "lacos": p_m_lacos, "bojos": p_m_bojos, "ramos": p_m_ramos, "marcas": p_m_marcas, "ruptura": p_m_ruptura, "vertical": p_m_vertical},
         "gravitacional": {"complexidade": p_gr_complexidade},
         "grid": {"tamanho": grid_tamanho, "passos": grid_passos},
         "estilo": {"italico": efeito_italico, "brush": efeito_brush, "giz": efeito_giz, "letra_de_mao": letra_de_mao},
@@ -349,7 +350,7 @@ if preset:
         img_display, img_transp = desenhar_runa(preset)
         col = cols[i % 4]
         
-        col.image(img_display, caption=f"ID #{seed+i}", use_column_width=True)
+        col.image(img_display, caption=f"ID #{seed+i}", use_container_width=True)
         
         with col.expander("Exportar Arquivos"):
             nome_customizado = st.text_input("Nome do arquivo:", value=f"simbolo_{seed+i}", key=f"nome_{seed+i}")

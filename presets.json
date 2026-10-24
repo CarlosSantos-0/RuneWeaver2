@@ -223,7 +223,7 @@
     "estelar": {"constelacao": 0.0, "estrelas": 0.0, "orbitas": 0.0, "eixo_astral": 0.0},
     "solar": {"foco": 0.0, "irradiacao": 0.0, "coroa": 0.0, "eclipse": 0.0},
     "lunar": {"caligrafia": 0.0, "fases": 0.0, "orbitas": 0.0, "auxiliares": 0.0, "hastes": 0.0, "arcos_internos": 0.0, "eclipse": 0.0},
-    "ignea": {"rugosidade": 0.6, "fenix": 0.4, "chama": 0.3, "catalise": 0.2, "brasa": 0.2, "reignicao": 0.3, "cruzamentos": 0.6, "labaredas": 0.7, "fagulhas": 0.8},
+    "ignea": {"estrutura": 0.65, "complexidade": 0.5, "rugosidade": 0.5, "chama": 0.5, "catalise": 0.4, "reignicao": 0.4, "cruzamentos": 0.4, "labaredas": 0.3, "fagulhas": 0.4},
     "marinha": {"corrente": 0.0, "lacos": 0.0, "ondas": 0.0, "respingos": 0.0, "ruptura": 0.0, "vertical": 0.0, "cor_onda": "#3D8BFF"},
     "grid": {"tamanho": 5, "passos": 4},
     "estilo": {"italico": false, "brush": false, "giz": false, "letra_de_mao": false},
@@ -245,10 +245,10 @@
     "solar": {"foco": 0.0, "irradiacao": 0.0, "coroa": 0.0, "eclipse": 0.0},
     "lunar": {"caligrafia": 0.0, "fases": 0.0, "orbitas": 0.0, "auxiliares": 0.0, "hastes": 0.0, "arcos_internos": 0.0, "eclipse": 0.0},
     "ignea": {"rugosidade": 0.0, "fenix": 0.0, "chama": 0.0, "catalise": 0.0, "brasa": 0.0, "reignicao": 0.0, "cruzamentos": 0.0, "labaredas": 0.0, "fagulhas": 0.0},
-    "marinha": {"corrente": 1.0, "lacos": 1.0, "ondas": 1.0, "respingos": 1.0, "ruptura": 1.0, "vertical": 1.0, "cor_onda": "#3D8BFF"},
+    "marinha": {"corrente": 0.7, "contraste": 0.8, "espirais": 0.7, "lacos": 0.4, "bojos": 0.35, "ramos": 0.5, "marcas": 0.4, "ruptura": 0.3, "vertical": 0.3},
     "grid": {"tamanho": 5, "passos": 4},
     "estilo": {"italico": false, "brush": false, "giz": false, "letra_de_mao": false},
-    "espessura": 3,
+    "espessura": 5,
     "cor": "#FFFFFF"
   },
   "Feitiçaria Gravitacional (Fórmulas de Sisk)": {
