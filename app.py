@@ -3,6 +3,7 @@ import random
 import json
 import os
 import io
+import math
 from PIL import Image, ImageDraw, ImageOps
 
 # Importações Modulares do Motor (Backend mantido intacto)
@@ -38,9 +39,111 @@ def converter_pixel_art(img_transparente, targ_w, targ_h, threshold=25):
                 
     return img_resized
 
+# ==========================================
+# 2. MOTOR DE INTERCEÇÃO VETORIAL (JSON)
+# ==========================================
+class DrawRecorder:
+    """
+    Intercepta as chamadas de desenho (linhas, polígonos, arcos) para extrair e guardar
+    os traços vetoriais exatos (polilinhas) que formam a runa, antes da rasterização.
+    """
+    def __init__(self, draw_obj):
+        self.draw = draw_obj
+        self.strokes = []
+
+    def __getattr__(self, attr):
+        return getattr(self.draw, attr)
+
+    def _extract_points(self, xy):
+        if isinstance(xy, (list, tuple)) and len(xy) > 0:
+            if isinstance(xy[0], (int, float)):
+                return [[float(xy[i]), float(xy[i+1])] for i in range(0, len(xy), 2)]
+            elif isinstance(xy[0], (list, tuple)):
+                return [[float(p[0]), float(p[1])] for p in xy]
+        return []
+
+    def line(self, xy, *args, **kwargs):
+        self.draw.line(xy, *args, **kwargs)
+        pts = self._extract_points(xy)
+        if len(pts) >= 2:
+            self.strokes.append(pts)
+
+    def polygon(self, xy, *args, **kwargs):
+        self.draw.polygon(xy, *args, **kwargs)
+        pts = self._extract_points(xy)
+        if len(pts) > 0:
+            pts.append(pts[0])  # Fecha o traço geométrico para as partículas
+            self.strokes.append(pts)
+
+    def ellipse(self, xy, *args, **kwargs):
+        self.draw.ellipse(xy, *args, **kwargs)
+        pts = self._extract_points(xy)
+        if len(pts) == 2:
+            x0, y0, x1, y1 = pts[0][0], pts[0][1], pts[1][0], pts[1][1]
+            cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+            rx, ry = abs(x1 - x0) / 2, abs(y1 - y0) / 2
+            # Ignora esferas de articulações minúsculas (<1.5px) para não sobrecarregar o Minecraft
+            if rx <= 1.5 and ry <= 1.5:
+                return
+            
+            # Converte a elipse perfeita numa polilinha densa de vértices (fragmentação)
+            poly = []
+            steps = max(12, int(3.14 * max(rx, ry) / 3))
+            for i in range(steps + 1):
+                angle = 2 * math.pi * i / steps
+                poly.append([cx + rx * math.cos(angle), cy + ry * math.sin(angle)])
+            self.strokes.append(poly)
+
+    def arc(self, xy, start, end, *args, **kwargs):
+        self.draw.arc(xy, start, end, *args, **kwargs)
+        pts = self._extract_points(xy)
+        if len(pts) == 2:
+            x0, y0, x1, y1 = pts[0][0], pts[0][1], pts[1][0], pts[1][1]
+            cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+            rx, ry = abs(x1 - x0) / 2, abs(y1 - y0) / 2
+            poly = []
+            s_rad = math.radians(start)
+            e_rad = math.radians(end)
+            if e_rad < s_rad: e_rad += 2 * math.pi
+            steps = max(6, int((e_rad - s_rad) * max(rx, ry) / 4))
+            for i in range(steps + 1):
+                angle = s_rad + (e_rad - s_rad) * i / steps
+                poly.append([cx + rx * math.cos(angle), cy + ry * math.sin(angle)])
+            self.strokes.append(poly)
+
+def gerar_json_matriz(strokes, tamanho, mirror, flip, italic):
+    """
+    Aplica as distorções espaciais e normaliza os vértices para 0.0 - 1.0
+    de acordo com as regras exatas do Minecraft 3D.
+    """
+    cy = tamanho / 2
+    transformed = []
+    
+    for traco in strokes:
+        new_traco = []
+        for x, y in traco:
+            nx, ny = x, y
+            # 1. Aplica o processamento espacial escolhido
+            if mirror:
+                nx = tamanho - nx
+            if flip:
+                ny = tamanho - ny
+            if italic:
+                # O inverso matemático exato da matriz PIL afim (1, 0.3, -0.3*cy)
+                nx = nx - 0.3 * ny + 0.3 * cy
+                
+            # 2. Normalização global (0 a 1) para a área da tela
+            u = round(nx / tamanho, 4)
+            v = round(ny / tamanho, 4)
+            new_traco.append([u, v])
+            
+        if len(new_traco) >= 2:
+            transformed.append(new_traco)
+            
+    return json.dumps({"strokes": transformed}, separators=(',', ':'))
 
 # ==========================================
-# 2. GESTÃO DE PRESETS (ARQUIVO EXTERNO)
+# 3. GESTÃO DE PRESETS (ARQUIVO EXTERNO)
 # ==========================================
 ARQUIVO_PRESETS = "presets.json"
 
@@ -59,7 +162,7 @@ def carregar_presets():
 PRESETS_SALVOS = carregar_presets()
 
 # ==========================================
-# 3. PAINEL DE CONTROLE (Sidebar)
+# 4. PAINEL DE CONTROLE (Sidebar)
 # ==========================================
 st.sidebar.header("Painel de Controle")
 modo = st.sidebar.radio("Modo de Operação", ["1. Criação Manual", "2. Carregar de Arquivo (Presets)"])
@@ -270,7 +373,7 @@ else:
         st.sidebar.error("Arquivo de presets não encontrado ou vazio.")
 
 # ==========================================
-# 4. COMPILADOR CENTRAL DE SÍMBOLOS
+# 5. COMPILADOR CENTRAL DE SÍMBOLOS
 # ==========================================
 def desenhar_runa(config):
     tamanho = 400
@@ -303,42 +406,54 @@ def desenhar_runa(config):
     step = (tamanho - (margem * 2)) / max(1, n - 1)
     
     base = Image.new("RGBA", (tamanho, tamanho), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(base)
+    real_draw = ImageDraw.Draw(base)
+    
+    # Substituto que interceta o canvas para guardar a matriz de vértices
+    recorder = DrawRecorder(real_draw)
+    
     usa_curvas = random.random() < config.get("modulos", {}).get("curvas", 0)
 
-    # Invoca as Famílias Modulares 
-    if is_comuns: comuns_grid.aplicar_comuns(draw, config, cx, cy, cor, esp, estilo, usa_curvas)
-    if is_met: metalica.aplicar(draw, config, cx, cy, cor, esp, estilo)
-    if is_sep: sepulcral.aplicar(draw, config, cx, cy, cor, esp, estilo)
-    if is_sang: sanguinea.aplicar(draw, config, cx, cy, cor, esp, estilo)
-    if is_crist: cristalina.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_aeral: aeral.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_glacial: glacial.aplicar(draw, config, n, step, margem, cor, esp, estilo)
-    if is_telurica: telurica.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_estelar: estelar.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_solar: solar.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_lunar: lunar.aplicar(draw, config, cx, cy, cor, esp, estilo)
-    if is_ignea: ignea.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_marinha: marinha.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_gravitacional: gravitacional.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_grid: comuns_grid.aplicar_grid_livre(draw, config, n, passos, step, margem, cor, esp, estilo)
+    # O Recorder processa as famílias, desenhando no PNG E guardando os vetores ao mesmo tempo
+    if is_comuns: comuns_grid.aplicar_comuns(recorder, config, cx, cy, cor, esp, estilo, usa_curvas)
+    if is_met: metalica.aplicar(recorder, config, cx, cy, cor, esp, estilo)
+    if is_sep: sepulcral.aplicar(recorder, config, cx, cy, cor, esp, estilo)
+    if is_sang: sanguinea.aplicar(recorder, config, cx, cy, cor, esp, estilo)
+    if is_crist: cristalina.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_aeral: aeral.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_glacial: glacial.aplicar(recorder, config, n, step, margem, cor, esp, estilo)
+    if is_telurica: telurica.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_estelar: estelar.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_solar: solar.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_lunar: lunar.aplicar(recorder, config, cx, cy, cor, esp, estilo)
+    if is_ignea: ignea.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_marinha: marinha.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_gravitacional: gravitacional.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_grid: comuns_grid.aplicar_grid_livre(recorder, config, n, passos, step, margem, cor, esp, estilo)
 
-    # Transformações e Filtros Finais
+    # Avaliação rigorosa das probabilidades UMA vez para a imagem e para o JSON
+    mirror = random.random() < config.get("simetria", {}).get("vertical", 0)
+    flip = random.random() < config.get("simetria", {}).get("horizontal", 0)
+    italic = config.get("estilo", {}).get("italico", False)
+
+    # 1. Aplicar transformações na Imagem 2D
     img_final = base.copy()
-    if random.random() < config.get("simetria", {}).get("vertical", 0): img_final.alpha_composite(ImageOps.mirror(img_final))
-    if random.random() < config.get("simetria", {}).get("horizontal", 0): img_final.alpha_composite(ImageOps.flip(img_final))
-    if config.get("estilo", {}).get("italico", False):
+    if mirror: img_final.alpha_composite(ImageOps.mirror(img_final))
+    if flip: img_final.alpha_composite(ImageOps.flip(img_final))
+    if italic:
         matriz = (1, 0.3, -0.3 * cy, 0, 1, 0)
         img_final = img_final.transform(img_final.size, Image.AFFINE, matriz, resample=Image.BICUBIC)
 
-    # Fundo de apresentação
+    # Fundo de apresentação (Streamlit apenas)
     fundo = Image.new("RGBA", (tamanho, tamanho), (15, 15, 15, 255))
     fundo.alpha_composite(img_final)
     
-    return fundo, img_final
+    # 2. Aplicar transformações puramente matemáticas na Matriz Vetorial (JSON)
+    json_data = gerar_json_matriz(recorder.strokes, tamanho, mirror, flip, italic)
+    
+    return fundo, img_final, json_data
 
 # ==========================================
-# 5. RENDERIZAÇÃO NA INTERFACE
+# 6. RENDERIZAÇÃO NA INTERFACE
 # ==========================================
 st.markdown("### Preview da Família Gerada")
 
@@ -347,7 +462,7 @@ if preset:
     for i in range(8):
         random.seed(seed + i)
         
-        img_display, img_transp = desenhar_runa(preset)
+        img_display, img_transp, json_matrix = desenhar_runa(preset)
         col = cols[i % 4]
         
         col.image(img_display, caption=f"ID #{seed+i}", use_container_width=True)
@@ -379,6 +494,14 @@ if preset:
                 data=image_to_bytes(img_mini), 
                 file_name=f"{nome_base}_mini.png", 
                 mime="image/png",
+                use_container_width=True
+            )
+            
+            st.download_button(
+                label="Arquivo JSON (Minecraft 3D)",
+                data=json_matrix,
+                file_name=f"{nome_base}.json",
+                mime="application/json",
                 use_container_width=True
             )
 else:
