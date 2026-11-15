@@ -316,7 +316,8 @@ if modo == "1. Criação Manual":
     with st.sidebar.expander("11. Família Pyre"):
         ativa_ignea = st.checkbox("Ativar Família Pyre (Dinâmica e Pinceladas)")
         if ativa_ignea:
-            p_i_estr = st.slider("Estrutura (Orgânico / Escrita) (%)", 0, 100, 65) / 100.0
+            st.markdown("*Lâminas afiladas: do orgânico (cicatriz) ao estruturado (alfabeto).*")
+            p_i_estr = st.slider("Estrutura (Orgânico ↔ Escrita) (%)", 0, 100, 65) / 100.0
             p_i_comp = st.slider("Complexidade (Glifos Compostos) (%)", 0, 100, 50) / 100.0
             p_i_rug = st.slider("Rugosidade de Borda (%)", 0, 100, 50) / 100.0
             p_i_chama = st.slider("Componente: Cuia de Chama (%)", 0, 100, 50) / 100.0
@@ -518,10 +519,7 @@ def desenhar_runa(config, current_seed):
 # ==========================================
 # 6. RENDERIZAÇÃO NA INTERFACE
 # ==========================================
-if modo == "3. Galeria de Runas Salvas":
-    st.markdown("### Runa Guardada")
-else:
-    st.markdown("### Preview da Família Gerada")
+st.markdown("### Preview da Família Gerada")
 
 if preset:
     # Se estiver no modo de galeria, renderiza apenas 1 runa. Caso contrário, gera 8.
@@ -534,17 +532,12 @@ if preset:
         
         col.image(img_display, caption=f"ID #{current_seed}", use_container_width=True)
         
-        with col.expander("Exportar / Guardar"):
-            nome_customizado = st.text_input("Nome da Runa:", value=f"simbolo_{current_seed}", key=f"nome_{current_seed}")
-            nome_base = nome_customizado.strip() if nome_customizado.strip() else f"simbolo_{current_seed}"
-            
-            # Botão Mágico para Salvar na Galeria
-            if st.button("Salvar Runa na Galeria", key=f"save_btn_{current_seed}", use_container_width=True):
-                salvar_runa(nome_base, current_seed, preset)
-                st.success(f"'{nome_base}' guardada com sucesso!")
+        with col.expander("Exportar Arquivos"):
+            nome_customizado = st.text_input("Nome do arquivo:", value=f"simbolo_{seed+i}", key=f"nome_{seed+i}")
+            nome_base = nome_customizado.strip() if nome_customizado.strip() else f"simbolo_{seed+i}"
             
             st.download_button(
-                label="Resolução Alta (400x400)", 
+                label="📁 Resolução Alta (400x400)", 
                 data=image_to_bytes(img_transp), 
                 file_name=f"{nome_base}_normal.png", 
                 mime="image/png",
@@ -553,7 +546,7 @@ if preset:
             
             img_carta = converter_pixel_art(img_transp, 39, 41)
             st.download_button(
-                label="Formato Médio (39x41)", 
+                label="Formato Medio (39x41)", 
                 data=image_to_bytes(img_carta), 
                 file_name=f"{nome_base}_carta.png", 
                 mime="image/png",
@@ -562,7 +555,7 @@ if preset:
             
             img_mini = converter_pixel_art(img_transp, 18, 18)
             st.download_button(
-                label="Formato Miniatura (18x18)", 
+                label="🤏 Formato Miniatura (18x18)", 
                 data=image_to_bytes(img_mini), 
                 file_name=f"{nome_base}_mini.png", 
                 mime="image/png",
@@ -570,7 +563,7 @@ if preset:
             )
             
             st.download_button(
-                label="Arquivo JSON (NeoForge 3D)",
+                label="Arquivo JSON (Minecraft 3D)",
                 data=json_matrix,
                 file_name=f"{nome_base}.json",
                 mime="application/json",
