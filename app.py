@@ -4,6 +4,7 @@ import json
 import os
 import io
 import math
+import copy
 from PIL import Image, ImageDraw, ImageOps
 
 # Importações Modulares do Motor (Backend mantido intacto)
@@ -16,16 +17,11 @@ st.title("RuneWeaver: Gerador Procedural de Runas")
 # 1. FUNÇÕES DE EXPORTAÇÃO E PIXEL ART
 # ==========================================
 def image_to_bytes(img):
-    """Converte uma imagem PIL para bytes de forma a ser descarregada no Streamlit."""
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
 
 def converter_pixel_art(img_transparente, targ_w, targ_h, threshold=25):
-    """
-    Comprime a imagem para dimensões reduzidas e força a opacidade (sem anti-aliasing)
-    para manter a fidelidade dos traços em formato Pixel Art.
-    """
     img_resized = img_transparente.resize((targ_w, targ_h), Image.Resampling.BOX)
     pixels = img_resized.load()
     
@@ -40,16 +36,13 @@ def converter_pixel_art(img_transparente, targ_w, targ_h, threshold=25):
     return img_resized
 
 # ==========================================
-# 2. MOTOR DE INTERCEÇÃO VETORIAL (JSON)
+# 2. MOTOR VETORIAL DE ESQUELETO (JSON)
 # ==========================================
 class DrawRecorder:
-    """
-    Intercepta as chamadas de desenho (linhas, polígonos, arcos) para extrair e guardar
-    os traços vetoriais exatos (polilinhas) que formam a runa, antes da rasterização.
-    """
     def __init__(self, draw_obj):
         self.draw = draw_obj
         self.strokes = []
+        self.current_stroke = []
 
     def __getattr__(self, attr):
         return getattr(self.draw, attr)
@@ -62,17 +55,48 @@ class DrawRecorder:
                 return [[float(p[0]), float(p[1])] for p in xy]
         return []
 
+    def end_stroke(self):
+        if len(self.current_stroke) >= 2:
+            filtered = [self.current_stroke[0]]
+            for pt in self.current_stroke[1:]:
+                last = filtered[-1]
+                dist = math.hypot(pt[0]-last[0], pt[1]-last[1])
+                if dist > 3.0: 
+                    filtered.append(pt)
+                    
+            last_pt = self.current_stroke[-1]
+            if filtered[-1] != last_pt and math.hypot(last_pt[0]-filtered[-1][0], last_pt[1]-filtered[-1][1]) > 0.1:
+                filtered.append(last_pt)
+                
+            if len(filtered) >= 2:
+                self.strokes.append(filtered)
+        self.current_stroke = []
+
+    def _add_path(self, pts):
+        if not pts: return
+        if self.current_stroke:
+            last = self.current_stroke[-1]
+            first = pts[0]
+            if math.hypot(first[0]-last[0], first[1]-last[1]) < 10.0:
+                self.current_stroke.extend(pts[1:])
+                return
+            if math.hypot(pts[-1][0]-last[0], pts[-1][1]-last[1]) < 10.0:
+                self.current_stroke.extend(reversed(pts[:-1]))
+                return
+            self.end_stroke()
+        self.current_stroke.extend(pts)
+
     def line(self, xy, *args, **kwargs):
         self.draw.line(xy, *args, **kwargs)
         pts = self._extract_points(xy)
-        if len(pts) >= 2:
-            self.strokes.append(pts)
+        self._add_path(pts)
 
     def polygon(self, xy, *args, **kwargs):
         self.draw.polygon(xy, *args, **kwargs)
+        self.end_stroke()
         pts = self._extract_points(xy)
         if len(pts) > 0:
-            pts.append(pts[0])  # Fecha o traço geométrico para as partículas
+            pts.append(pts[0])
             self.strokes.append(pts)
 
     def ellipse(self, xy, *args, **kwargs):
@@ -82,17 +106,17 @@ class DrawRecorder:
             x0, y0, x1, y1 = pts[0][0], pts[0][1], pts[1][0], pts[1][1]
             cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
             rx, ry = abs(x1 - x0) / 2, abs(y1 - y0) / 2
-            # Ignora esferas de articulações minúsculas (<1.5px) para não sobrecarregar o Minecraft
-            if rx <= 1.5 and ry <= 1.5:
-                return
             
-            # Converte a elipse perfeita numa polilinha densa de vértices (fragmentação)
-            poly = []
-            steps = max(12, int(3.14 * max(rx, ry) / 3))
-            for i in range(steps + 1):
-                angle = 2 * math.pi * i / steps
-                poly.append([cx + rx * math.cos(angle), cy + ry * math.sin(angle)])
-            self.strokes.append(poly)
+            if max(rx, ry) <= 4.0:
+                self._add_path([[cx, cy]])
+            else:
+                self.end_stroke()
+                poly = []
+                steps = max(12, int(3.14 * max(rx, ry) / 3))
+                for i in range(steps + 1):
+                    angle = 2 * math.pi * i / steps
+                    poly.append([cx + rx * math.cos(angle), cy + ry * math.sin(angle)])
+                self.strokes.append(poly)
 
     def arc(self, xy, start, end, *args, **kwargs):
         self.draw.arc(xy, start, end, *args, **kwargs)
@@ -101,6 +125,7 @@ class DrawRecorder:
             x0, y0, x1, y1 = pts[0][0], pts[0][1], pts[1][0], pts[1][1]
             cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
             rx, ry = abs(x1 - x0) / 2, abs(y1 - y0) / 2
+            
             poly = []
             s_rad = math.radians(start)
             e_rad = math.radians(end)
@@ -109,13 +134,9 @@ class DrawRecorder:
             for i in range(steps + 1):
                 angle = s_rad + (e_rad - s_rad) * i / steps
                 poly.append([cx + rx * math.cos(angle), cy + ry * math.sin(angle)])
-            self.strokes.append(poly)
+            self._add_path(poly)
 
 def gerar_json_matriz(strokes, tamanho, mirror, flip, italic):
-    """
-    Aplica as distorções espaciais e normaliza os vértices para 0.0 - 1.0
-    de acordo com as regras exatas do Minecraft 3D.
-    """
     cy = tamanho / 2
     transformed = []
     
@@ -123,16 +144,10 @@ def gerar_json_matriz(strokes, tamanho, mirror, flip, italic):
         new_traco = []
         for x, y in traco:
             nx, ny = x, y
-            # 1. Aplica o processamento espacial escolhido
-            if mirror:
-                nx = tamanho - nx
-            if flip:
-                ny = tamanho - ny
-            if italic:
-                # O inverso matemático exato da matriz PIL afim (1, 0.3, -0.3*cy)
-                nx = nx - 0.3 * ny + 0.3 * cy
+            if mirror: nx = tamanho - nx
+            if flip: ny = tamanho - ny
+            if italic: nx = nx - 0.3 * ny + 0.3 * cy
                 
-            # 2. Normalização global (0 a 1) para a área da tela
             u = round(nx / tamanho, 4)
             v = round(ny / tamanho, 4)
             new_traco.append([u, v])
@@ -143,35 +158,49 @@ def gerar_json_matriz(strokes, tamanho, mirror, flip, italic):
     return json.dumps({"strokes": transformed}, separators=(',', ':'))
 
 # ==========================================
-# 3. GESTÃO DE PRESETS (ARQUIVO EXTERNO)
+# 3. GESTÃO DE ARQUIVOS (PRESETS E GALERIA)
 # ==========================================
 ARQUIVO_PRESETS = "presets.json"
+ARQUIVO_RUNAS = "runas_salvas.json"
 
-def carregar_presets():
-    if os.path.exists(ARQUIVO_PRESETS):
+def carregar_json(caminho):
+    if os.path.exists(caminho):
         try:
-            with open(ARQUIVO_PRESETS, "r", encoding="utf-8") as f:
+            with open(caminho, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception as e:
-            st.sidebar.error(f"Erro ao ler {ARQUIVO_PRESETS}: {e}")
+        except Exception:
             return {}
-    else:
-        st.sidebar.warning(f"Arquivo '{ARQUIVO_PRESETS}' não encontrado.")
-        return {}
+    return {}
 
-PRESETS_SALVOS = carregar_presets()
+def salvar_runa(nome, seed, config):
+    runas = carregar_json(ARQUIVO_RUNAS)
+    runas[nome] = {
+        "seed": seed,
+        "config": config
+    }
+    with open(ARQUIVO_RUNAS, "w", encoding="utf-8") as f:
+        json.dump(runas, f, indent=4)
+
+PRESETS_SALVOS = carregar_json(ARQUIVO_PRESETS)
+RUNAS_SALVAS = carregar_json(ARQUIVO_RUNAS)
 
 # ==========================================
 # 4. PAINEL DE CONTROLE (Sidebar)
 # ==========================================
 st.sidebar.header("Painel de Controle")
-modo = st.sidebar.radio("Modo de Operação", ["1. Criação Manual", "2. Carregar de Arquivo (Presets)"])
+modo = st.sidebar.radio("Modo de Operação", [
+    "1. Criação Manual", 
+    "2. Carregar de Arquivo (Presets)", 
+    "3. Galeria de Runas Salvas"
+])
 
 st.sidebar.markdown("---")
-seed = st.sidebar.number_input("Seed de Geração", value=777)
-random.seed(seed)
-
 preset = {}
+seed_salva = None
+
+if modo != "3. Galeria de Runas Salvas":
+    seed = st.sidebar.number_input("Seed de Geração", value=777)
+    random.seed(seed)
 
 if modo == "1. Criação Manual":
     with st.sidebar.expander("1. Parâmetros Globais"):
@@ -287,14 +316,13 @@ if modo == "1. Criação Manual":
     with st.sidebar.expander("11. Família Pyre"):
         ativa_ignea = st.checkbox("Ativar Família Pyre (Dinâmica e Pinceladas)")
         if ativa_ignea:
-            st.markdown("*Lâminas afiladas: do orgânico (cicatriz) ao estruturado (alfabeto).*")
             p_i_estr = st.slider("Estrutura (Orgânico ↔ Escrita) (%)", 0, 100, 65) / 100.0
             p_i_comp = st.slider("Complexidade (Glifos Compostos) (%)", 0, 100, 50) / 100.0
             p_i_rug = st.slider("Rugosidade de Borda (%)", 0, 100, 50) / 100.0
             p_i_chama = st.slider("Componente: Cuia de Chama (%)", 0, 100, 50) / 100.0
-            p_i_catalise = st.slider("Componente: Irradiação (%)", 0, 100, 40) / 100.0
+            p_i_catalise = st.slider("Componente: Expansão Radial (%)", 0, 100, 40) / 100.0
             p_i_reig = st.slider("Componente: Haste Partida (%)", 0, 100, 40) / 100.0
-            p_i_cruz = st.slider("Componente: Cruz / Cortes (%)", 0, 100, 40) / 100.0
+            p_i_cruz = st.slider("Modificador: Cortes (%)", 0, 100, 60) / 100.0
             p_i_lab = st.slider("Modificador: Labaredas (%)", 0, 100, 30) / 100.0
             p_i_fag = st.slider("Modificador: Fagulhas (%)", 0, 100, 40) / 100.0
         else: p_i_estr = p_i_comp = p_i_rug = p_i_chama = p_i_catalise = p_i_reig = p_i_cruz = p_i_lab = p_i_fag = 0.0
@@ -302,7 +330,6 @@ if modo == "1. Criação Manual":
     with st.sidebar.expander("12. Família Tide"):
         ativa_marinha = st.checkbox("Ativar Família Tide (Contínua/Ondular)")
         if ativa_marinha:
-            st.markdown("*Traço único de pena larga, com volutas, laços e marcas.*")
             p_m_corrente = st.slider("Ondulação Base (%)", 0, 100, 70) / 100.0
             p_m_contraste = st.slider("Contraste da Pena (%)", 0, 100, 80) / 100.0
             p_m_espirais = st.slider("Volutas nas Pontas (%)", 0, 100, 70) / 100.0
@@ -312,12 +339,14 @@ if modo == "1. Criação Manual":
             p_m_marcas = st.slider("Marcas e Pontos (%)", 0, 100, 40) / 100.0
             p_m_ruptura = st.slider("Ganchos e Rupturas (%)", 0, 100, 30) / 100.0
             p_m_vertical = st.slider("Alinhamento Vertical (%)", 0, 100, 30) / 100.0
-        else: p_m_corrente = p_m_contraste = p_m_espirais = p_m_lacos = p_m_bojos = p_m_ramos = p_m_marcas = p_m_ruptura = p_m_vertical = 0.0
-
+            cor_onda = st.color_picker("Cor Secundária", "#3D8BFF")
+        else: 
+            p_m_corrente = p_m_contraste = p_m_espirais = p_m_lacos = p_m_bojos = p_m_ramos = p_m_marcas = p_m_ruptura = p_m_vertical = 0.0
+            cor_onda = "#3D8BFF"
+            
     with st.sidebar.expander("13. Família Calculus"):
         ativa_gravitacional = st.checkbox("Ativar Família Calculus (Algébrica)")
         if ativa_gravitacional:
-            st.markdown("*Geração baseada em matrizes, vetores ortogonais e alinhamento de equações.*")
             p_gr_complexidade = st.slider("Densidade da Equação (%)", 0, 100, 70) / 100.0
         else: p_gr_complexidade = 0.0
 
@@ -363,19 +392,27 @@ if modo == "1. Criação Manual":
     st.sidebar.markdown(f"### Copie este JSON de Configuração:")
     st.sidebar.code(json.dumps({ "Nova Família de Runas": preset }, indent=4), language="json")
 
-else:
+elif modo == "2. Carregar de Arquivo (Presets)":
     if PRESETS_SALVOS:
         escolha = st.sidebar.selectbox("Escolha a Família de Runas", list(PRESETS_SALVOS.keys()))
         preset = PRESETS_SALVOS[escolha]
-        st.sidebar.markdown(f"### Lendo configuração de `{ARQUIVO_PRESETS}`:")
-        st.sidebar.code(json.dumps(preset, indent=4), language="json")
     else:
         st.sidebar.error("Arquivo de presets não encontrado ou vazio.")
 
+elif modo == "3. Galeria de Runas Salvas":
+    if RUNAS_SALVAS:
+        escolha_salva = st.sidebar.selectbox("Escolha uma Runa Salva", list(RUNAS_SALVAS.keys()))
+        runa_data = RUNAS_SALVAS[escolha_salva]
+        preset = runa_data["config"]
+        seed_salva = runa_data["seed"]
+        st.sidebar.success(f"Runa '{escolha_salva}' carregada! (Seed: {seed_salva})")
+    else:
+        st.sidebar.info("A tua galeria está vazia. Gera runas e guarda-as primeiro!")
+
 # ==========================================
-# 5. COMPILADOR CENTRAL DE SÍMBOLOS
+# 5. COMPILADOR CENTRAL DE SÍMBOLOS (DUAL-PASS)
 # ==========================================
-def desenhar_runa(config):
+def desenhar_runa(config, current_seed):
     tamanho = 400
     cx, cy = tamanho // 2, tamanho // 2
     esp = config.get("espessura", 6)
@@ -399,55 +436,81 @@ def desenhar_runa(config):
     is_gravitacional = ativas.get("gravitacional", False)
     is_grid = ativas.get("grid_livre", False)
 
-    grid_cfg = config.get("grid", {})
-    n = grid_cfg.get("tamanho", 5)
-    passos = grid_cfg.get("passos", 4)
+    n = config.get("grid", {}).get("tamanho", 5)
+    passos = config.get("grid", {}).get("passos", 4)
     margem = 100
     step = (tamanho - (margem * 2)) / max(1, n - 1)
-    
-    base = Image.new("RGBA", (tamanho, tamanho), (0, 0, 0, 0))
-    real_draw = ImageDraw.Draw(base)
-    
-    # Substituto que interceta o canvas para guardar a matriz de vértices
-    recorder = DrawRecorder(real_draw)
-    
     usa_curvas = random.random() < config.get("modulos", {}).get("curvas", 0)
 
-    # O Recorder processa as famílias, desenhando no PNG E guardando os vetores ao mesmo tempo
-    if is_comuns: comuns_grid.aplicar_comuns(recorder, config, cx, cy, cor, esp, estilo, usa_curvas)
-    if is_met: metalica.aplicar(recorder, config, cx, cy, cor, esp, estilo)
-    if is_sep: sepulcral.aplicar(recorder, config, cx, cy, cor, esp, estilo)
-    if is_sang: sanguinea.aplicar(recorder, config, cx, cy, cor, esp, estilo)
-    if is_crist: cristalina.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_aeral: aeral.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_glacial: glacial.aplicar(recorder, config, n, step, margem, cor, esp, estilo)
-    if is_telurica: telurica.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_estelar: estelar.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_solar: solar.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_lunar: lunar.aplicar(recorder, config, cx, cy, cor, esp, estilo)
-    if is_ignea: ignea.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_marinha: marinha.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_gravitacional: gravitacional.aplicar(recorder, config, cx, cy, n, step, margem, cor, esp, estilo)
-    if is_grid: comuns_grid.aplicar_grid_livre(recorder, config, n, passos, step, margem, cor, esp, estilo)
+    # PASSAGEM 1: RENDERIZAÇÃO VISUAL (PNG)
+    random.seed(current_seed)
+    
+    base = Image.new("RGBA", (tamanho, tamanho), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(base)
 
-    # Avaliação rigorosa das probabilidades UMA vez para a imagem e para o JSON
+    if is_comuns: comuns_grid.aplicar_comuns(draw, config, cx, cy, cor, esp, estilo, usa_curvas)
+    if is_met: metalica.aplicar(draw, config, cx, cy, cor, esp, estilo)
+    if is_sep: sepulcral.aplicar(draw, config, cx, cy, cor, esp, estilo)
+    if is_sang: sanguinea.aplicar(draw, config, cx, cy, cor, esp, estilo)
+    if is_crist: cristalina.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_aeral: aeral.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_glacial: glacial.aplicar(draw, config, n, step, margem, cor, esp, estilo)
+    if is_telurica: telurica.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_estelar: estelar.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_solar: solar.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_lunar: lunar.aplicar(draw, config, cx, cy, cor, esp, estilo)
+    if is_ignea: ignea.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_marinha: marinha.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_gravitacional: gravitacional.aplicar(draw, config, cx, cy, n, step, margem, cor, esp, estilo)
+    if is_grid: comuns_grid.aplicar_grid_livre(draw, config, n, passos, step, margem, cor, esp, estilo)
+
+    img_final = base.copy()
     mirror = random.random() < config.get("simetria", {}).get("vertical", 0)
     flip = random.random() < config.get("simetria", {}).get("horizontal", 0)
     italic = config.get("estilo", {}).get("italico", False)
 
-    # 1. Aplicar transformações na Imagem 2D
-    img_final = base.copy()
     if mirror: img_final.alpha_composite(ImageOps.mirror(img_final))
     if flip: img_final.alpha_composite(ImageOps.flip(img_final))
     if italic:
         matriz = (1, 0.3, -0.3 * cy, 0, 1, 0)
         img_final = img_final.transform(img_final.size, Image.AFFINE, matriz, resample=Image.BICUBIC)
 
-    # Fundo de apresentação (Streamlit apenas)
     fundo = Image.new("RGBA", (tamanho, tamanho), (15, 15, 15, 255))
     fundo.alpha_composite(img_final)
+
+    # PASSAGEM 2: ESQUELETO VETORIAL (JSON para Minecraft)
+    random.seed(current_seed)
     
-    # 2. Aplicar transformações puramente matemáticas na Matriz Vetorial (JSON)
+    skel_config = copy.deepcopy(config)
+    skel_config["espessura"] = 1
+    skel_config["estilo"] = {"italico": False, "brush": False, "giz": False, "letra_de_mao": False}
+    
+    if "ignea" in skel_config: 
+        skel_config["ignea"]["rugosidade"] = 0.0
+        skel_config["ignea"]["fagulhas"] = 0.0
+    if "marinha" in skel_config: 
+        skel_config["marinha"]["respingos"] = 0.0
+
+    base_skel = Image.new("RGBA", (tamanho, tamanho), (0, 0, 0, 0))
+    recorder = DrawRecorder(ImageDraw.Draw(base_skel))
+
+    if is_comuns: comuns_grid.aplicar_comuns(recorder, skel_config, cx, cy, cor, 1, skel_config["estilo"], usa_curvas)
+    if is_met: metalica.aplicar(recorder, skel_config, cx, cy, cor, 1, skel_config["estilo"])
+    if is_sep: sepulcral.aplicar(recorder, skel_config, cx, cy, cor, 1, skel_config["estilo"])
+    if is_sang: sanguinea.aplicar(recorder, skel_config, cx, cy, cor, 1, skel_config["estilo"])
+    if is_crist: cristalina.aplicar(recorder, skel_config, cx, cy, n, step, margem, cor, 1, skel_config["estilo"])
+    if is_aeral: aeral.aplicar(recorder, skel_config, cx, cy, n, step, margem, cor, 1, skel_config["estilo"])
+    if is_glacial: glacial.aplicar(recorder, skel_config, n, step, margem, cor, 1, skel_config["estilo"])
+    if is_telurica: telurica.aplicar(recorder, skel_config, cx, cy, n, step, margem, cor, 1, skel_config["estilo"])
+    if is_estelar: estelar.aplicar(recorder, skel_config, cx, cy, n, step, margem, cor, 1, skel_config["estilo"])
+    if is_solar: solar.aplicar(recorder, skel_config, cx, cy, n, step, margem, cor, 1, skel_config["estilo"])
+    if is_lunar: lunar.aplicar(recorder, skel_config, cx, cy, cor, 1, skel_config["estilo"])
+    if is_ignea: ignea.aplicar(recorder, skel_config, cx, cy, n, step, margem, cor, 1, skel_config["estilo"])
+    if is_marinha: marinha.aplicar(recorder, skel_config, cx, cy, n, step, margem, cor, 1, skel_config["estilo"])
+    if is_gravitacional: gravitacional.aplicar(recorder, skel_config, cx, cy, n, step, margem, cor, 1, skel_config["estilo"])
+    if is_grid: comuns_grid.aplicar_grid_livre(recorder, skel_config, n, passos, step, margem, cor, 1, skel_config["estilo"])
+
+    recorder.end_stroke()
     json_data = gerar_json_matriz(recorder.strokes, tamanho, mirror, flip, italic)
     
     return fundo, img_final, json_data
@@ -455,24 +518,33 @@ def desenhar_runa(config):
 # ==========================================
 # 6. RENDERIZAÇÃO NA INTERFACE
 # ==========================================
-st.markdown("### Preview da Família Gerada")
+if modo == "3. Galeria de Runas Salvas":
+    st.markdown("### 🏆 Runa Guardada")
+else:
+    st.markdown("### 👁️ Preview da Família Gerada")
 
 if preset:
+    # Se estiver no modo de galeria, renderiza apenas 1 runa. Caso contrário, gera 8.
+    iteracoes = [seed_salva] if (modo == "3. Galeria de Runas Salvas" and seed_salva is not None) else [seed + i for i in range(8)]
+    
     cols = st.columns(4)
-    for i in range(8):
-        random.seed(seed + i)
-        
-        img_display, img_transp, json_matrix = desenhar_runa(preset)
+    for i, current_seed in enumerate(iteracoes):
+        img_display, img_transp, json_matrix = desenhar_runa(preset, current_seed)
         col = cols[i % 4]
         
-        col.image(img_display, caption=f"ID #{seed+i}", use_container_width=True)
+        col.image(img_display, caption=f"ID #{current_seed}", use_container_width=True)
         
-        with col.expander("Exportar Arquivos"):
-            nome_customizado = st.text_input("Nome do arquivo:", value=f"simbolo_{seed+i}", key=f"nome_{seed+i}")
-            nome_base = nome_customizado.strip() if nome_customizado.strip() else f"simbolo_{seed+i}"
+        with col.expander("📥 Exportar / Guardar"):
+            nome_customizado = st.text_input("Nome da Runa:", value=f"simbolo_{current_seed}", key=f"nome_{current_seed}")
+            nome_base = nome_customizado.strip() if nome_customizado.strip() else f"simbolo_{current_seed}"
+            
+            # Botão Mágico para Salvar na Galeria
+            if st.button("💾 Salvar Runa na Galeria", key=f"save_btn_{current_seed}", use_container_width=True):
+                salvar_runa(nome_base, current_seed, preset)
+                st.success(f"'{nome_base}' guardada com sucesso!")
             
             st.download_button(
-                label="Resolução Alta (400x400)", 
+                label="📁 Resolução Alta (400x400)", 
                 data=image_to_bytes(img_transp), 
                 file_name=f"{nome_base}_normal.png", 
                 mime="image/png",
@@ -481,7 +553,7 @@ if preset:
             
             img_carta = converter_pixel_art(img_transp, 39, 41)
             st.download_button(
-                label="Formato Medio (39x41)", 
+                label="🎴 Formato Médio (39x41)", 
                 data=image_to_bytes(img_carta), 
                 file_name=f"{nome_base}_carta.png", 
                 mime="image/png",
@@ -490,7 +562,7 @@ if preset:
             
             img_mini = converter_pixel_art(img_transp, 18, 18)
             st.download_button(
-                label="Formato Miniatura (18x18)", 
+                label="🤏 Formato Miniatura (18x18)", 
                 data=image_to_bytes(img_mini), 
                 file_name=f"{nome_base}_mini.png", 
                 mime="image/png",
@@ -498,7 +570,7 @@ if preset:
             )
             
             st.download_button(
-                label="Arquivo JSON (Minecraft 3D)",
+                label="📄 Arquivo JSON (NeoForge 3D)",
                 data=json_matrix,
                 file_name=f"{nome_base}.json",
                 mime="application/json",
@@ -506,5 +578,3 @@ if preset:
             )
 else:
     st.info("Painel aguardando configurações válidas para renderização.")
-
-random.seed(seed)
