@@ -5,6 +5,9 @@ import os
 import io
 import math
 import copy
+import zipfile
+import re
+import unicodedata
 from PIL import Image, ImageDraw, ImageOps
 
 # Importações Modulares do Motor (Backend mantido intacto)
@@ -42,6 +45,7 @@ class DrawRecorder:
     def __init__(self, draw_obj):
         self.draw = draw_obj
         self.strokes = []
+        self.dots = []  # (cx, cy, diametro) em pixels
         self.current_stroke = []
 
     def __getattr__(self, attr):
@@ -108,7 +112,8 @@ class DrawRecorder:
             rx, ry = abs(x1 - x0) / 2, abs(y1 - y0) / 2
             
             if max(rx, ry) <= 4.0:
-                self._add_path([[cx, cy]])
+                self.end_stroke()
+                self.dots.append([cx, cy, 2 * max(rx, ry)])
             else:
                 self.end_stroke()
                 poly = []
@@ -136,26 +141,96 @@ class DrawRecorder:
                 poly.append([cx + rx * math.cos(angle), cy + ry * math.sin(angle)])
             self._add_path(poly)
 
-def gerar_json_matriz(strokes, tamanho, mirror, flip, italic):
+LARGURA_BASE = 0.034   # largura total do traço (normalizada), igual ao corpo das runas atuais
+LARGURA_PONTA = 0.35   # fração da largura nas pontas (afinamento)
+TRECHO_PONTA = 0.12    # fração do comprimento do traço usada no afinamento
+LARGURA_MIN_DOT = 0.04
+
+def _larguras(pts):
+    n = len(pts)
+    acc = [0.0]
+    for i in range(1, n):
+        acc.append(acc[-1] + math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]))
+    total = acc[-1]
+    fechado = math.hypot(pts[0][0]-pts[-1][0], pts[0][1]-pts[-1][1]) < 1e-3
+    if total <= 0 or fechado:
+        return [LARGURA_BASE] * n
+    ws = []
+    for a in acc:
+        t = a / total
+        f = min(1.0, t / TRECHO_PONTA, (1 - t) / TRECHO_PONTA)
+        ws.append(round(LARGURA_BASE * max(LARGURA_PONTA, f), 4))
+    return ws
+
+def gerar_json_matriz(strokes, tamanho, mirror, flip, italic, dots=()):
+    """Gera glifo v2: {"version":2,"strokes":[{"points","widths"}],"dots":[[u,v,w]]}"""
     cy = tamanho / 2
+
+    def tr(x, y):
+        nx, ny = x, y
+        if mirror: nx = tamanho - nx
+        if flip: ny = tamanho - ny
+        if italic: nx = nx - 0.3 * ny + 0.3 * cy
+        return round(nx / tamanho, 4), round(ny / tamanho, 4)
+
     transformed = []
-    
     for traco in strokes:
-        new_traco = []
-        for x, y in traco:
-            nx, ny = x, y
-            if mirror: nx = tamanho - nx
-            if flip: ny = tamanho - ny
-            if italic: nx = nx - 0.3 * ny + 0.3 * cy
-                
-            u = round(nx / tamanho, 4)
-            v = round(ny / tamanho, 4)
-            new_traco.append([u, v])
-            
-        if len(new_traco) >= 2:
-            transformed.append(new_traco)
-            
-    return json.dumps({"strokes": transformed}, separators=(',', ':'))
+        pts = [list(tr(x, y)) for x, y in traco]
+        if len(pts) >= 2:
+            transformed.append({"points": pts, "widths": _larguras(pts)})
+
+    out_dots = []
+    for x, y, d in dots:
+        u, v = tr(x, y)
+        out_dots.append([u, v, round(max(d / tamanho, LARGURA_MIN_DOT), 4)])
+
+    return json.dumps({"version": 2, "strokes": transformed, "dots": out_dots}, separators=(',', ':'))
+
+MOD_ASSETS = "assets/arcaelion"  # caminho dentro do mod (src/main/resources/...)
+GLYPH_DIR = f"{MOD_ASSETS}/glyphs"
+TEX_DIR = f"{MOD_ASSETS}/textures/gui/runas"
+TAM_MINI = 32    # SpellHud.ICON_TEX_SIZE
+TAM_CARTA = 128  # GrimoireScreen.ART_TEX_SIZE
+
+def validar_glifo(json_str):
+    """Replica as regras do GlyphLibrary.java. Retorna lista de erros (vazia = compatível)."""
+    erros = []
+    try:
+        d = json.loads(json_str)
+        validos = 0
+        for t in d["strokes"]:
+            pts, ws = t["points"], t["widths"]
+            if len(pts) != len(ws):
+                erros.append("points e widths com tamanhos diferentes")
+            if any(len(p) != 2 or not all(isinstance(c, (int, float)) and -0.5 <= c <= 1.5 for c in p) for p in pts):
+                erros.append("ponto fora de [u,v] ou fora do quadrado")
+            if len(pts) >= 2:
+                validos += 1
+        for dot in d.get("dots", []):
+            if len(dot) != 3:
+                erros.append("dot precisa de [u,v,w]")
+        if validos == 0 and not d.get("dots"):
+            erros.append("glifo vazio (cairia no círculo genérico)")
+    except Exception as e:
+        erros.append(f"JSON inválido: {e}")
+    return erros
+
+
+def id_runa(nome):
+    """Nome digitado -> id do Java: minúsculo, sem acento, [a-z0-9_], com prefixo runa_."""
+    n = unicodedata.normalize("NFKD", nome).encode("ascii", "ignore").decode().lower()
+    n = re.sub(r"[^a-z0-9]+", "_", n).strip("_")
+    if not n:
+        n = "sem_nome"
+    return n if n.startswith("runa_") else f"runa_{n}"
+
+def montar_zip(arquivos):
+    """arquivos: dict nome -> bytes"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for nome, dados in arquivos.items():
+            z.writestr(nome, dados)
+    return buf.getvalue()
 
 # ==========================================
 # 3. GESTÃO DE ARQUIVOS (PRESETS E GALERIA)
@@ -512,7 +587,7 @@ def desenhar_runa(config, current_seed):
     if is_grid: comuns_grid.aplicar_grid_livre(recorder, skel_config, n, passos, step, margem, cor, 1, skel_config["estilo"])
 
     recorder.end_stroke()
-    json_data = gerar_json_matriz(recorder.strokes, tamanho, mirror, flip, italic)
+    json_data = gerar_json_matriz(recorder.strokes, tamanho, mirror, flip, italic, recorder.dots)
     
     return fundo, img_final, json_data
 
@@ -526,6 +601,7 @@ if preset:
     iteracoes = [seed_salva] if (modo == "3. Galeria de Runas Salvas" and seed_salva is not None) else [seed + i for i in range(8)]
     
     cols = st.columns(4)
+    todos = {}
     for i, current_seed in enumerate(iteracoes):
         img_display, img_transp, json_matrix = desenhar_runa(preset, current_seed)
         col = cols[i % 4]
@@ -536,38 +612,77 @@ if preset:
             nome_customizado = st.text_input("Nome do arquivo:", value=f"simbolo_{seed+i}", key=f"nome_{seed+i}")
             nome_base = nome_customizado.strip() if nome_customizado.strip() else f"simbolo_{seed+i}"
             
+            bytes_normal = image_to_bytes(img_transp)
+            bytes_carta = image_to_bytes(converter_pixel_art(img_transp, TAM_CARTA, TAM_CARTA))
+            bytes_mini = image_to_bytes(converter_pixel_art(img_transp, TAM_MINI, TAM_MINI))
+            
+            rid = id_runa(nome_base)
+            st.caption(f"ID no Java: `{rid}`  →  {GLYPH_DIR}/{rid}.json")
+            arquivos = {
+                f"{GLYPH_DIR}/{rid}.json": json_matrix.encode("utf-8"),
+                f"{TEX_DIR}/{rid}.png": bytes_mini,
+                f"{TEX_DIR}/cartas/{rid}.png": bytes_carta,
+                f"{TEX_DIR}/{rid}_normal.png": bytes_normal,
+            }
+            erros_glifo = validar_glifo(json_matrix)
+            if erros_glifo:
+                st.error("Glifo incompatível com o Java: " + "; ".join(erros_glifo))
+            else:
+                st.caption("✅ Glifo válido para o GlyphLibrary")
+            for nome_arq, dados in arquivos.items():
+                if nome_arq in todos:
+                    st.warning(f"Nome repetido: {rid} (o arquivo anterior foi sobrescrito no ZIP geral)")
+                todos[nome_arq] = dados
+            
             st.download_button(
                 label="📁 Resolução Alta (400x400)", 
-                data=image_to_bytes(img_transp), 
-                file_name=f"{nome_base}_normal.png", 
+                data=bytes_normal, 
+                file_name=f"{rid}_normal.png", 
                 mime="image/png",
-                use_container_width=True
+                use_container_width=True,
+                key=f"dl_normal_{current_seed}_{i}"
             )
-            
-            img_carta = converter_pixel_art(img_transp, 39, 41)
             st.download_button(
-                label="Formato Medio (39x41)", 
-                data=image_to_bytes(img_carta), 
-                file_name=f"{nome_base}_carta.png", 
+                label=f"Carta ({TAM_CARTA}x{TAM_CARTA})", 
+                data=bytes_carta, 
+                file_name=f"{rid}_carta.png", 
                 mime="image/png",
-                use_container_width=True
+                use_container_width=True,
+                key=f"dl_carta_{current_seed}_{i}"
             )
-            
-            img_mini = converter_pixel_art(img_transp, 18, 18)
             st.download_button(
-                label="🤏 Formato Miniatura (18x18)", 
-                data=image_to_bytes(img_mini), 
-                file_name=f"{nome_base}_mini.png", 
+                label=f"🤏 Miniatura ({TAM_MINI}x{TAM_MINI})", 
+                data=bytes_mini, 
+                file_name=f"{rid}.png", 
                 mime="image/png",
-                use_container_width=True
+                use_container_width=True,
+                key=f"dl_mini_{current_seed}_{i}"
             )
-            
             st.download_button(
                 label="Arquivo JSON (Minecraft 3D)",
                 data=json_matrix,
-                file_name=f"{nome_base}.json",
+                file_name=f"{rid}.json",
                 mime="application/json",
-                use_container_width=True
+                use_container_width=True,
+                key=f"dl_json_{current_seed}_{i}"
             )
+            st.download_button(
+                label="📦 Baixar todos (ZIP)",
+                data=montar_zip(arquivos),
+                file_name=f"{rid}.zip",
+                mime="application/zip",
+                use_container_width=True,
+                key=f"dl_zip_{current_seed}_{i}"
+            )
+    
+    st.divider()
+    st.download_button(
+        label=f"📦 Baixar TODAS as runas ({len(iteracoes)}) em um ZIP",
+        data=montar_zip(todos),
+        file_name="runas_todas.zip",
+        mime="application/zip",
+        use_container_width=True,
+        key="dl_zip_todas"
+    )
 else:
     st.info("Painel aguardando configurações válidas para renderização.")
